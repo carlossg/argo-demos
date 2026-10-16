@@ -11,7 +11,7 @@ Example recording: `recordings/demo-antigravity-quarkus.mp4` (~519s, real time, 
 
 | Path | Purpose |
 |------|---------|
-| `demo.sh`, `demo-functions.sh` | Install everything on the current kubectl cluster |
+| `demo.sh`, `demo-functions.sh` | `create`, `delete`, `scaledown` and `scaleup` the demo on GKE |
 | `cloudflare-dns.py` | Upserts the demo ingress A records in Cloudflare |
 | `examples/` | Canary-demo rollouts and AI analysis templates |
 | `k8s-kevin-quarkus-demo/` | Quarkus demo rollout, wired to the selected agent |
@@ -37,7 +37,12 @@ Read from the environment or `./.env` / `../.env` only:
 
 ```sh
 export GEMINI_API_KEY=...
-AGENT_TYPE=antigravity ./demo.sh     # default; or AGENT_TYPE=kdubois
+./demo.sh create [--agent-type antigravity|kdubois] [--gemma]   # antigravity is the default
+./demo.sh scaledown                                             # save cost, keep the cluster
+./demo.sh scaleup
+./demo.sh delete [--yes]                                        # deletes ingresses, then the cluster
+./demo.sh starship-toggle                                       # toggle starship prompt modules while demoing
+./demo.sh --help                                                # all options (--project, --cluster-name, --no-dns, --no-dashboard)
 ```
 
 Models are pinned in the agent manifests: analysts `gemini-3.8-flash`,

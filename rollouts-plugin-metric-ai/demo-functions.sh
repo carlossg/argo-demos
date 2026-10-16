@@ -6,6 +6,20 @@
 : "${CLUSTER_NAME:=autopilot-cluster-1}"
 : "${DEMO_LABEL:=demo=argo-rollouts}"
 
+# Finds a sibling repo checkout (e.g. kubernetes-agents-antigravity) next to this
+# directory or next to its parent; override the search root with REPOS_DIR.
+function find_sibling_repo() {
+	local repo="$1" dir
+	local here="${script_dir:-$(pwd)}"
+	for dir in "${REPOS_DIR:-}" "$(dirname "${here}")" "$(dirname "$(dirname "${here}")")"; do
+		if [ -n "${dir}" ] && [ -d "${dir}/${repo}" ]; then
+			echo "${dir}/${repo}"
+			return 0
+		fi
+	done
+	return 1
+}
+
 starship_toggle() {
 	cat <<-EOF | while read -r module; do starship toggle "$module"; done
 		gcloud
@@ -236,7 +250,8 @@ function cloud_build_setup() {
 function install_argo_rollouts() {
 	local script_dir
 	script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-	local operator_kustomize_url="${script_dir}/../argo-rollouts-manager/config/default"
+	local operator_kustomize_url
+	operator_kustomize_url="$(find_sibling_repo argo-rollouts-manager || echo "${script_dir}/../argo-rollouts-manager")/config/default"
 	local operator_ns="argo-rollouts-manager-system"
 	local operator_deployment="argo-rollouts-manager-controller-manager"
 
@@ -358,7 +373,7 @@ function install_kubernetes_agent_antigravity() {
 	local repo=kubernetes-agents-antigravity
 	echo "Installing Kubernetes Agents: $repo"
 	local local_path
-	local_path="$(dirname "$(pwd)")/$repo/"
+	local_path="$(find_sibling_repo "$repo" || echo "$(dirname "${script_dir:-$(pwd)}")/$repo")/"
 
 	echo "Creating secret 'argo-rollouts-secret'..."
 	if [ -z "${GEMINI_API_KEY:-}" ]; then
@@ -514,7 +529,8 @@ function scale_down() {
 
 	echo "Scaling all deployments in argo-rollouts namespace to 0..."
 	kubectl scale deployment --all -n argo-rollouts --replicas=0 || echo "  ⚠️  deployments not found"
-	kubectl scale sandbox --all -n argo-rollouts --replicas=0 || echo "  ⚠️  sandboxes not found"
+	# Sandboxes have no replicas field, so delete them; scale_up recreates them
+	kubectl delete sandbox --all -n argo-rollouts --ignore-not-found || echo "  ⚠️  sandboxes not found"
 
 	echo "Scaling all deployments in gemma-system namespace to 0..."
 	kubectl scale deployment --all -n gemma-system --replicas=0 || echo "  ⚠️  deployments not found"
@@ -544,6 +560,17 @@ function scale_up() {
 	echo "Scaling all deployments in argo-rollouts namespace to 1..."
 	kubectl scale deployment --all -n argo-rollouts --replicas=1 || echo "  ⚠️  deployments not found"
 
+	if [ "${AGENT_TYPE:-antigravity}" = "antigravity" ]; then
+		local sandbox_manifest
+		sandbox_manifest="$(find_sibling_repo kubernetes-agents-antigravity || echo /nonexistent)/k8s/log-analyst-sandbox.yaml"
+		if [ -f "${sandbox_manifest}" ]; then
+			echo "Recreating the log analyst sandbox..."
+			kubectl apply -n argo-rollouts -f "${sandbox_manifest}" || echo "  ⚠️  could not recreate the sandbox"
+		else
+			echo "  ℹ  ${sandbox_manifest} not found; re-run 'create' to recreate the log analyst sandbox"
+		fi
+	fi
+
 	echo "Scaling all deployments in gemma-system namespace to 1..."
 	kubectl scale deployment --all -n gemma-system --replicas=1 || echo "  ⚠️  deployments not found"
 
@@ -562,12 +589,14 @@ function scale_up() {
 
 function tear_down() {
 	# confirm (portable across bash and zsh; zsh's `read` has no -p/-n flags)
-	printf "Are you sure you want to tear down the cluster? (y/N) "
-	read -r REPLY
-	echo
-	if [[ ! $REPLY =~ ^[Yy]$ ]]; then
-		echo "Aborted."
-		return 1
+	if [ "${ASSUME_YES:-false}" != "true" ]; then
+		printf "Are you sure you want to tear down the cluster? (y/N) "
+		read -r REPLY
+		echo
+		if [[ ! $REPLY =~ ^[Yy]$ ]]; then
+			echo "Aborted."
+			return 1
+		fi
 	fi
 
 	echo "========================================="
@@ -587,6 +616,7 @@ function tear_down() {
 	echo "Deleting cluster ${CLUSTER_NAME}..."
 	gcloud container \
 		clusters delete "${CLUSTER_NAME}" \
-		--region "us-central1"
+		--region "us-central1" \
+		$([ "${ASSUME_YES:-false}" = "true" ] && echo --quiet)
 
 }
