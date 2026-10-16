@@ -1,0 +1,50 @@
+steps:
+  # Pull the latest image for caching
+  - name: 'gcr.io/cloud-builders/docker'
+    entrypoint: 'bash'
+    args:
+      - '-c'
+      - |
+        docker pull us-central1-docker.pkg.dev/$PROJECT_ID/github/rollouts-demo:latest || exit 0
+
+  # Build the container image with cache
+  - name: 'gcr.io/cloud-builders/docker'
+    args:
+      - 'build'
+      - '--cache-from'
+      - 'us-central1-docker.pkg.dev/$PROJECT_ID/github/rollouts-demo:latest'
+      - '-t'
+      - 'us-central1-docker.pkg.dev/$PROJECT_ID/github/rollouts-demo:$SHORT_SHA'
+      - '-t'
+      - 'us-central1-docker.pkg.dev/$PROJECT_ID/github/rollouts-demo:$BRANCH_NAME'
+      - '-t'
+      - 'us-central1-docker.pkg.dev/$PROJECT_ID/github/rollouts-demo:latest'
+      - '.'
+
+  # Push the container image to Artifact Registry
+  - name: 'gcr.io/cloud-builders/docker'
+    args:
+      - 'push'
+      - '--all-tags'
+      - 'us-central1-docker.pkg.dev/$PROJECT_ID/github/rollouts-demo'
+
+  # Create release in Cloud Deploy
+  - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
+    entrypoint: gcloud
+    args:
+      - 'deploy'
+      - 'releases'
+      - 'create'
+      - 'release-$SHORT_SHA'
+      - '--delivery-pipeline=rollouts-demo-pipeline'
+      - '--region=us-central1'
+      - '--source=.'
+      - '--images=argoproj/rollouts-demo=us-central1-docker.pkg.dev/$PROJECT_ID/github/rollouts-demo:$SHORT_SHA'
+
+options:
+  logging: CLOUD_LOGGING_ONLY
+
+images:
+  - 'us-central1-docker.pkg.dev/$PROJECT_ID/github/rollouts-demo:$SHORT_SHA'
+  - 'us-central1-docker.pkg.dev/$PROJECT_ID/github/rollouts-demo:$BRANCH_NAME'
+  - 'us-central1-docker.pkg.dev/$PROJECT_ID/github/rollouts-demo:latest'
