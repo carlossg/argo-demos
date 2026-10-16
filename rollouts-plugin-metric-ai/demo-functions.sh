@@ -611,7 +611,7 @@ function tear_down() {
 	# that would clean them up disappears with it, which eventually exhausts
 	# the project's NEG quota.
 	echo "Deleting ingresses..."
-	kubectl delete ingress --all --all-namespaces --ignore-not-found --timeout=5m
+	kubectl delete ingress --all --all-namespaces --ignore-not-found --timeout=15m
 
 	echo "Deleting cluster ${CLUSTER_NAME}..."
 	gcloud container \
