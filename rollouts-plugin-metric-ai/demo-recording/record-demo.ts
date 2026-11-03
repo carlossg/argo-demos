@@ -19,6 +19,11 @@ const DASHBOARD_HOST = process.env.DASHBOARD_HOST ?? "quarkus-demo.argo.csanchez
 const DASHBOARD_URL = process.env.DASHBOARD_URL ?? `http://${DASHBOARD_HOST}/`;
 const DASHBOARD_IP = process.env.DASHBOARD_IP;
 const DEMO_REPO = process.env.DEMO_REPO ?? "carlossg/argo-rollouts-quarkus-demo";
+const IMAGES = {
+	stable: "ghcr.io/kdubois/argo-rollouts-quarkus-demo:v1.stable@sha256:2d12930f365812a6b1517d35b12343def51cbcbec29575369dd28c4a14a32b93",
+	nullpointer: "ghcr.io/kdubois/argo-rollouts-quarkus-demo:v2.nullpointer@sha256:8a2d9be0071471d4a6366129aa15bf4bce760e0620cb63074bec7b49971aa018",
+	memoryleak: "ghcr.io/kdubois/argo-rollouts-quarkus-demo:v3.memoryleak@sha256:606babfc5a6c391027d5c3c30d2846eacebfb4ecec87c40ceb0ed28ec022d307",
+};
 const IMAGE = "ghcr.io/kdubois/argo-rollouts-quarkus-demo";
 const OUT_DIR = `${import.meta.dir}/recording`;
 const WIDTH = Number(process.env.WIDTH ?? 1600);
@@ -75,6 +80,16 @@ async function waitForAnalysisRun(before: string[]): Promise<string> {
 		return phase !== "" && phase !== "Running" && phase !== "Pending";
 	});
 	return name;
+}
+
+/** Wait until the rollout is fully promoted to Healthy. */
+async function waitForRolloutPromoted() {
+	await waitUntil("rollout to be Healthy", 300_000, 3_000, async () => {
+		const phase = await kubectlJsonpath(["get", "rollout", "quarkus-demo", "-n", NAMESPACE], "{.status.phase}");
+		const available = await kubectlJsonpath(["get", "rollout", "quarkus-demo", "-n", NAMESPACE], "{.status.availableReplicas}");
+		const replicas = await kubectlJsonpath(["get", "rollout", "quarkus-demo", "-n", NAMESPACE], "{.spec.replicas}");
+		return phase === "Healthy" && available === replicas;
+	});
 }
 
 /** The abort message is transient (cleared once the rollback finishes), so also accept abort=true or a failed AnalysisRun. */
@@ -199,9 +214,24 @@ async function main() {
 	markAct("intro");
 	await sleep(5_000);
 
+	// Scenario 1: Stable Canary (Happy Path -> Promotes to 100% Healthy)
+	markAct("stable_start");
+	const beforeStable = await analysisRunNames();
+	const tag = `run-${Date.now()}`;
+	await $`kubectl patch rollout quarkus-demo -n ${NAMESPACE} --type=merge -p ${JSON.stringify({
+		spec: { template: { metadata: { annotations: { "test.scenario": tag } } } },
+	})}`;
+	markAct("stable_analysis_running");
+	const run0 = await waitForAnalysisRun(beforeStable);
+	markAct("stable_verdict");
+	await waitForRolloutPromoted();
+	markAct("stable_healthy");
+	await sleep(5_000);
+
+	// Scenario 2: NullPointer Regression (v2.nullpointer)
 	markAct("nullpointer_start");
 	const before = await analysisRunNames();
-	const npImage = `*=${IMAGE}:v2.nullpointer`;
+	const npImage = `*=${IMAGES.nullpointer}`;
 	const startMs = Date.now();
 	await $`kubectl argo rollouts set image quarkus-demo ${npImage} -n ${NAMESPACE}`;
 
@@ -227,7 +257,7 @@ async function main() {
 		await page.goto(DASHBOARD_URL);
 		markAct("memoryleak_start");
 		const before2 = await analysisRunNames();
-		const mlImage = `*=${IMAGE}:v3.memoryleak`;
+		const mlImage = `*=${IMAGES.memoryleak}`;
 		await $`kubectl argo rollouts set image quarkus-demo ${mlImage} -n ${NAMESPACE}`;
 		markAct("memoryleak_analysis_running");
 		const run2 = await waitForAnalysisRun(before2);

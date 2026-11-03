@@ -3,6 +3,7 @@
   "private": true,
   "type": "module",
   "scripts": {
+    "test": "bun run test-scenarios.ts",
     "record": "bun run record-demo.ts"
   },
   "dependencies": {
