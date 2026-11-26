@@ -334,9 +334,11 @@ function update_cloudflare_dns() {
 
 function create_ingress() {
 	local ingress=canary-csanchez
+	local script_dir
+	script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 	echo "Creating ingress"
-	kubectl apply -f ingress-csanchez.yaml
+	kubectl apply -f "${script_dir}/ingress-csanchez.yaml"
 
 	wait_for_ingress_ip "${ingress}" default
 }
