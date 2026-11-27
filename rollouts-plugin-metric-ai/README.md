@@ -45,8 +45,11 @@ export GEMINI_API_KEY=...
 ./demo.sh --help                                                # all options (--project, --cluster-name, --no-dns, --no-dashboard)
 ```
 
-Models are pinned in the agent manifests: analysts `gemini-4-hydrogen`,
-orchestrator and remediation `gemini-4-argon`.
+Models are pinned in the agent manifests: `antigravity` (default, from
+`kubernetes-agents-antigravity/k8s`) uses `gemini-3.8-flash` for analysts and
+`gemini-4-argon` for orchestrator and remediation; `kdubois`
+(`k8s-kdubois-agent/configmap-model-patch.yaml`) uses `gemini-4-hydrogen` for
+both `ANALYSIS_MODEL` and `REMEDIATION_MODEL`.
 
 ## Record
 

@@ -25,6 +25,11 @@ spec:
               Ignore color changes. 
               Consider LoadBalancerNegNotReady, LoadBalancerNegWithoutHealthCheck, FailedScheduling, and temporary readiness/liveness probe failures (e.g. connection refused during startup) as normal temporary rollout conditions, not errors.
 ---
+# Legacy inline-mode template kept for historical reference only.
+# rollouts-plugin-metric-ai v0.1.10+ (used by rolloutmanager.yaml) removed
+# `analysisMode: default` and `model` in favor of agent-only mode (`agentUrl`,
+# as in `canary-analysis-ai-agent` above), where the model is configured in the
+# agent manifests.
 apiVersion: argoproj.io/v1alpha1
 kind: AnalysisTemplate
 metadata:
@@ -38,7 +43,7 @@ spec:
       provider:
         plugin:
           argoproj-labs/metric-ai:
-            # Use default mode (inline mode)
+            # Legacy inline mode (unsupported in v0.1.10+; use canary-analysis-ai-agent)
             analysisMode: default
             # stablePodLabel: app=rollouts-demo,revision=stable
             # canaryPodLabel: app=rollouts-demo,revision=canary

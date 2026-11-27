@@ -6,11 +6,22 @@
 : "${CLUSTER_NAME:=autopilot-cluster-1}"
 : "${DEMO_LABEL:=demo=argo-rollouts}"
 
+# Capture the directory containing this file at source time so functions still
+# resolve relative manifests after the caller changes directories.
+if [ -n "${BASH_SOURCE[0]:-}" ]; then
+	_DEMO_FUNCTIONS_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+elif [ -n "${ZSH_VERSION:-}" ]; then
+	# shellcheck disable=SC2016
+	eval '_DEMO_FUNCTIONS_DIR="$(cd "$(dirname "${(%):-%x}")" && pwd)"'
+else
+	_DEMO_FUNCTIONS_DIR="${script_dir:-$(pwd)}"
+fi
+
 # Finds a sibling repo checkout (e.g. kubernetes-agents-antigravity) next to this
 # directory or next to its parent; override the search root with REPOS_DIR.
 function find_sibling_repo() {
 	local repo="$1" dir
-	local here="${script_dir:-$(pwd)}"
+	local here="${_DEMO_FUNCTIONS_DIR}"
 	for dir in "${REPOS_DIR:-}" "$(dirname "${here}")" "$(dirname "$(dirname "${here}")")"; do
 		if [ -n "${dir}" ] && [ -d "${dir}/${repo}" ]; then
 			echo "${dir}/${repo}"
@@ -248,10 +259,8 @@ function cloud_build_setup() {
 }
 
 function install_argo_rollouts() {
-	local script_dir
-	script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 	local operator_kustomize_url
-	operator_kustomize_url="$(find_sibling_repo argo-rollouts-manager || echo "${script_dir}/../argo-rollouts-manager")/config/default"
+	operator_kustomize_url="$(find_sibling_repo argo-rollouts-manager || echo "${_DEMO_FUNCTIONS_DIR}/../argo-rollouts-manager")/config/default"
 	local operator_ns="argo-rollouts-manager-system"
 	local operator_deployment="argo-rollouts-manager-controller-manager"
 
@@ -268,14 +277,14 @@ function install_argo_rollouts() {
 			CLUSTER_SCOPED_ARGO_ROLLOUTS_NAMESPACES=argo-rollouts
 
 		echo "Applying operator RBAC patches"
-		kubectl apply -f "${script_dir}/operator-rbac-patch.yaml"
+		kubectl apply -f "${_DEMO_FUNCTIONS_DIR}/operator-rbac-patch.yaml"
 
 		echo "Waiting for argo-rollouts-manager operator to be ready"
 		kubectl wait "deployment/${operator_deployment}" \
 			--for=condition=Available -n "${operator_ns}" --timeout=3m
 
 		echo "Applying RolloutManager CR (upstream image + plugin binary download)"
-		kubectl apply -f "${script_dir}/rolloutmanager.yaml"
+		kubectl apply -f "${_DEMO_FUNCTIONS_DIR}/rolloutmanager.yaml"
 
 		echo "Waiting for argo-rollouts deployment to be created"
 		local timeout=150
@@ -316,8 +325,6 @@ function wait_for_ingress_ip() {
 function update_cloudflare_dns() {
 	local ingress="${1:?}"
 	local namespace="${2:-default}"
-	local script_dir
-	script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 	local ip hosts
 	ip=$(kubectl get ingress "${ingress}" -n "${namespace}" -o jsonpath='{.status.loadBalancer.ingress[0].ip}')
@@ -329,16 +336,14 @@ function update_cloudflare_dns() {
 
 	echo "Updating Cloudflare DNS: ${hosts} -> ${ip}"
 	# shellcheck disable=SC2086
-	python3 "${script_dir}/cloudflare-dns.py" "${ip}" $(echo "${hosts}") || echo "⚠️  WARNING: Cloudflare DNS update failed for ingress ${ingress}"
+	python3 "${_DEMO_FUNCTIONS_DIR}/cloudflare-dns.py" "${ip}" $(echo "${hosts}") || echo "⚠️  WARNING: Cloudflare DNS update failed for ingress ${ingress}"
 }
 
 function create_ingress() {
 	local ingress=canary-csanchez
-	local script_dir
-	script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 	echo "Creating ingress"
-	kubectl apply -f "${script_dir}/ingress-csanchez.yaml"
+	kubectl apply -f "${_DEMO_FUNCTIONS_DIR}/ingress-csanchez.yaml"
 
 	wait_for_ingress_ip "${ingress}" default
 }
@@ -358,11 +363,9 @@ function install_kubernetes_agent() {
 # Resolves the GitHub token the agents use to open remediation PRs: $GITHUB_TOKEN,
 # else GITHUB_TOKEN from ./.env or ../.env.
 function resolve_github_token() {
-	local script_dir
-	script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 	local token="${GITHUB_TOKEN:-}"
 	local env_file
-	for env_file in "${script_dir}/.env" "${script_dir}/../.env"; do
+	for env_file in "${_DEMO_FUNCTIONS_DIR}/.env" "${_DEMO_FUNCTIONS_DIR}/../.env"; do
 		[ -n "${token}" ] && break
 		if [ -f "${env_file}" ]; then
 			token="$(grep -m1 '^GITHUB_TOKEN=' "${env_file}" | cut -d= -f2-)"
@@ -375,7 +378,7 @@ function install_kubernetes_agent_antigravity() {
 	local repo=kubernetes-agents-antigravity
 	echo "Installing Kubernetes Agents: $repo"
 	local local_path
-	local_path="$(find_sibling_repo "$repo" || echo "$(dirname "${script_dir:-$(pwd)}")/$repo")/"
+	local_path="$(find_sibling_repo "$repo" || echo "$(dirname "${_DEMO_FUNCTIONS_DIR}")/$repo")/"
 
 	echo "Creating secret 'argo-rollouts-secret'..."
 	if [ -z "${GEMINI_API_KEY:-}" ]; then
@@ -413,9 +416,6 @@ function uninstall_kubernetes_agent_antigravity() {
 }
 
 function install_kubernetes_agent_kdubois() {
-	local script_dir
-	script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-
 	echo "Installing Kubernetes Agent: kdubois/kubernetes-aiops-agent"
 
 	if [ -z "${GEMINI_API_KEY:-}" ]; then
@@ -438,7 +438,9 @@ function install_kubernetes_agent_kdubois() {
 		--dry-run=client -o yaml | kubectl apply -f -
 
 	echo "Installing kdubois/kubernetes-aiops-agent"
-	kubectl apply -k "${script_dir}/k8s-kdubois-agent"
+	kubectl apply -k "${_DEMO_FUNCTIONS_DIR}/k8s-kdubois-agent"
+	# Restart existing pods so ConfigMap model changes (envFrom) take effect
+	kubectl rollout restart deployment/kubernetes-agent -n argo-rollouts
 }
 
 function check_huggingface_secret() {
