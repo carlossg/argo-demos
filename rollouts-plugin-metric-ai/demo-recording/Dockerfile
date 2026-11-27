@@ -1,4 +1,4 @@
-FROM mcr.microsoft.com/playwright:v1.58.2-noble
+FROM mcr.microsoft.com/playwright:v1.65.1-noble
 
 ARG TARGETARCH
 ARG KUBECTL_VERSION=v1.32.3
