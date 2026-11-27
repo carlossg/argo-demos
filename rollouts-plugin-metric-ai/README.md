@@ -45,7 +45,7 @@ export GEMINI_API_KEY=...
 ./demo.sh --help                                                # all options (--project, --cluster-name, --no-dns, --no-dashboard)
 ```
 
-Models are pinned in the agent manifests: analysts `gemini-3.8-flash`,
+Models are pinned in the agent manifests: analysts `gemini-4-hydrogen`,
 orchestrator and remediation `gemini-4-argon`.
 
 ## Record
