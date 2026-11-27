@@ -37,7 +37,7 @@ patches:
     patch: |-
       - op: replace
         path: /spec/metrics/0/provider/plugin/argoproj-labs~1metric-ai/githubUrl
-        value: https://github.com/carlossg/argo-rollouts-quarkus-demo
+        value: https://github.com/carlossg/argo-rollouts-aiops-dashboard
       - op: replace
         path: /spec/metrics/0/provider/plugin/argoproj-labs~1metric-ai/agentUrl
         value: http://kubernetes-agent-orchestrator.argo-rollouts.svc.cluster.local:8080
