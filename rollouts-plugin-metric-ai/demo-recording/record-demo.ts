@@ -18,7 +18,7 @@ const NAMESPACE = process.env.NAMESPACE ?? "quarkus-demo";
 const DASHBOARD_HOST = process.env.DASHBOARD_HOST ?? "quarkus-demo.argo.csanchez.org";
 const DASHBOARD_URL = process.env.DASHBOARD_URL ?? `http://${DASHBOARD_HOST}/`;
 const DASHBOARD_IP = process.env.DASHBOARD_IP;
-const DEMO_REPO = process.env.DEMO_REPO ?? "carlossg/argo-rollouts-quarkus-demo";
+const DEMO_REPO = process.env.DEMO_REPO ?? "carlossg/argo-rollouts-aiops-dashboard";
 const IMAGES = {
 	stable: "ghcr.io/kdubois/argo-rollouts-quarkus-demo:v1.stable@sha256:2d12930f365812a6b1517d35b12343def51cbcbec29575369dd28c4a14a32b93",
 	nullpointer: "ghcr.io/kdubois/argo-rollouts-quarkus-demo:v2.nullpointer@sha256:8a2d9be0071471d4a6366129aa15bf4bce760e0620cb63074bec7b49971aa018",

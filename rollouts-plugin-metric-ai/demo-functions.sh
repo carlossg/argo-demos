@@ -405,6 +405,27 @@ function install_kubernetes_agent_antigravity() {
 		kubectl apply -n argo-rollouts -k $repo/k8s
 		popd >/dev/null
 	fi
+
+	install_remediation_agent "${GEMINI_API_KEY:-}" "${github_token}"
+}
+
+function install_remediation_agent() {
+	local gemini_key="${1:-}"
+	local github_token="${2:-}"
+	echo "Installing kdubois/remediation-agent..."
+	kubectl apply -k "https://github.com/kdubois/remediation-agent/deployment?ref=main"
+
+	for ns in remediation-system remediation; do
+		kubectl create secret generic remediation-agent \
+			--namespace="${ns}" \
+			--from-literal=github_token="${github_token}" \
+			--from-literal=llm_api_key="${gemini_key}" \
+			--dry-run=client -o yaml | kubectl apply -f -
+	done
+
+	kubectl patch configmap remediation-agent-config -n remediation-system --type=merge -p '{"data":{"REMEDIATION_ALLOWED_REPOS":"https://github.com/carlossg/argo-rollouts-aiops-dashboard","REMEDIATION_SANDBOX_MODEL":"gemini-4-neon","REMEDIATION_SANDBOX_LLM_BASE_URL":"https://generativelanguage.googleapis.com/v1beta/openai/","REMEDIATION_SANDBOX_RUNTIME_CLASS":"gvisor"}}'
+	kubectl set image deployment/remediation-agent agent=ghcr.io/carlossg/remediation-agent:main -n remediation-system
+	kubectl rollout status deployment/remediation-agent -n remediation-system --timeout=180s
 }
 
 function uninstall_kubernetes_agent_antigravity() {

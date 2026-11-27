@@ -16,6 +16,7 @@ import { $ } from "bun";
 const NAMESPACE = process.env.NAMESPACE ?? "quarkus-demo";
 const DASHBOARD_HOST = process.env.DASHBOARD_HOST ?? "quarkus-demo.argo.csanchez.org";
 const DASHBOARD_IP = process.env.DASHBOARD_IP ?? "8.232.134.219";
+const DEMO_REPO = process.env.DEMO_REPO ?? "carlossg/argo-rollouts-aiops-dashboard";
 
 const IMAGES = {
 	stable: "ghcr.io/kdubois/argo-rollouts-quarkus-demo:v1.stable@sha256:2d12930f365812a6b1517d35b12343def51cbcbec29575369dd28c4a14a32b93",
@@ -131,10 +132,46 @@ async function runScenario1Stable() {
 	console.log("✅ SCENARIO 1 PASSED: Canary evaluated as healthy, AI voted PROMOTE, Rollout 100% Healthy.");
 }
 
+async function waitForRemediationPR(sinceMs: number): Promise<string> {
+	let prUrl = "";
+	await waitUntil(`remediation PR in ${DEMO_REPO}`, 420_000, 10_000, async () => {
+		const prs = (await $`gh pr list --repo ${DEMO_REPO} --state all --json number,url,createdAt --limit 5`.json()) as {
+			number: number;
+			url: string;
+			createdAt: string;
+		}[];
+		prUrl = prs.find((p) => new Date(p.createdAt).getTime() > sinceMs)?.url ?? "";
+		return Boolean(prUrl);
+	});
+	return prUrl;
+}
+
+async function waitForRemediationOutcome(sinceMs: number): Promise<string> {
+	let artifactUrl = "";
+	await waitUntil(`remediation PR or issue in ${DEMO_REPO}`, 420_000, 10_000, async () => {
+		const prs = (await $`gh pr list --repo ${DEMO_REPO} --state all --json number,url,createdAt --limit 5`.json()) as {
+			number: number;
+			url: string;
+			createdAt: string;
+		}[];
+		artifactUrl = prs.find((p) => new Date(p.createdAt).getTime() > sinceMs)?.url ?? "";
+		if (artifactUrl) return true;
+		const issues = (await $`gh issue list --repo ${DEMO_REPO} --state all --json number,url,createdAt --limit 5`.json()) as {
+			number: number;
+			url: string;
+			createdAt: string;
+		}[];
+		artifactUrl = issues.find((i) => new Date(i.createdAt).getTime() > sinceMs)?.url ?? "";
+		return Boolean(artifactUrl);
+	});
+	return artifactUrl;
+}
+
 async function runScenario2NullPointer() {
 	console.log("\n=======================================================");
 	console.log("▶️  SCENARIO 2: NullPointerException Regression (v2.nullpointer)");
 	console.log("=======================================================");
+	const scenarioStartMs = Date.now();
 	const before = await getAnalysisRunNames();
 	console.log(`   Updating canary image to ${IMAGES.nullpointer}...`);
 	await $`kubectl argo rollouts set image quarkus-demo "*=${IMAGES.nullpointer}" -n ${NAMESPACE}`;
@@ -156,13 +193,18 @@ async function runScenario2NullPointer() {
 	console.log("   Verifying Rollout aborted and rolling back...");
 	await waitForRolloutAborted(run);
 	await waitForFullRecovery();
-	console.log("✅ SCENARIO 2 PASSED: NullPointer detected, AI voted ABORT, Rollout aborted and safely recovered.");
+
+	console.log(`   Waiting for remediation PR in ${DEMO_REPO}...`);
+	const prUrl = await waitForRemediationPR(scenarioStartMs);
+	console.log(`   Remediation PR created: ${prUrl}`);
+	console.log("✅ SCENARIO 2 PASSED: NullPointer detected, AI voted ABORT, Rollout aborted, remediation PR opened.");
 }
 
 async function runScenario3MemoryLeak() {
 	console.log("\n=======================================================");
 	console.log("▶️  SCENARIO 3: Memory Leak Regression (v3.memoryleak)");
 	console.log("=======================================================");
+	const scenarioStartMs = Date.now();
 	const before = await getAnalysisRunNames();
 	console.log(`   Updating canary image to ${IMAGES.memoryleak}...`);
 	await $`kubectl argo rollouts set image quarkus-demo "*=${IMAGES.memoryleak}" -n ${NAMESPACE}`;
@@ -184,7 +226,11 @@ async function runScenario3MemoryLeak() {
 	console.log("   Verifying Rollout aborted and rolling back...");
 	await waitForRolloutAborted(run);
 	await waitForFullRecovery();
-	console.log("✅ SCENARIO 3 PASSED: Memory anomaly detected, AI voted ABORT, Rollout aborted and safely recovered.");
+
+	console.log(`   Waiting for remediation PR or issue in ${DEMO_REPO}...`);
+	const artifactUrl = await waitForRemediationOutcome(scenarioStartMs);
+	console.log(`   Remediation artifact created: ${artifactUrl}`);
+	console.log("✅ SCENARIO 3 PASSED: Memory anomaly detected, AI voted ABORT, Rollout aborted, remediation artifact opened.");
 }
 
 async function cleanupBaseline() {
