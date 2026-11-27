@@ -352,7 +352,7 @@ function install_kubernetes_agent() {
 	local agent_type="${AGENT_TYPE:-antigravity}"
 	case "${agent_type}" in
 		antigravity) install_kubernetes_agent_antigravity ;;
-		kdubois) install_kubernetes_agent_kdubois; uninstall_kubernetes_agent_antigravity ;;
+		kdubois) install_kubernetes_agent_kdubois || return $?; uninstall_kubernetes_agent_antigravity ;;
 		*)
 			echo "❌ Unknown AGENT_TYPE '${agent_type}' (expected 'antigravity' or 'kdubois')"
 			return 1
