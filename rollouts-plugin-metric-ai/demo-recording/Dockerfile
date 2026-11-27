@@ -25,8 +25,8 @@ RUN ARCH="${TARGETARCH:-amd64}" \
   && chmod +x /usr/local/bin/kubectl-argo-rollouts
 
 WORKDIR /workspace
-COPY package.json bun.lock ./
-RUN bun install --frozen-lockfile
+COPY package.json ./
+RUN bun install
 COPY . .
 
 ENTRYPOINT ["bun", "run"]
