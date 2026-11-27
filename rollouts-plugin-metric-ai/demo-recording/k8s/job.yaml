@@ -1,0 +1,39 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: demo-recorder
+  namespace: quarkus-demo
+spec:
+  backoffLimit: 0
+  activeDeadlineSeconds: 1800
+  template:
+    spec:
+      serviceAccountName: demo-recorder
+      restartPolicy: Never
+      containers:
+        - name: recorder
+          image: demo-recording:latest
+          args: ["record-demo.ts"]
+          env:
+            - name: DASHBOARD_URL
+              value: "http://quarkus-demo-stable.quarkus-demo.svc.cluster.local/"
+            - name: GCS_BUCKET
+              value: "REPLACE_WITH_GCS_BUCKET"
+            - name: GEMINI_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: demo-recorder-secret
+                  key: GEMINI_API_KEY
+                  optional: true
+            - name: GH_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: demo-recorder-secret
+                  key: GITHUB_TOKEN
+          resources:
+            requests:
+              cpu: "1"
+              memory: "2Gi"
+            limits:
+              cpu: "2"
+              memory: "4Gi"

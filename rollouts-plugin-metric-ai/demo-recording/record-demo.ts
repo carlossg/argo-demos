@@ -12,6 +12,7 @@
 
 import { $ } from "bun";
 import { chromium } from "playwright";
+import { uploadToGcs } from "./gcs";
 import { type Cut, cutVideo } from "./trim-video";
 import { addVoiceover } from "./voiceover";
 
@@ -286,6 +287,9 @@ async function main() {
 	await cutVideo(webm, mp4, cuts);
 	if (process.env.VOICEOVER !== "0") {
 		await addVoiceover(mp4, acts, cuts);
+	}
+	if (process.env.GCS_BUCKET) {
+		await uploadToGcs(mp4, process.env.GCS_BUCKET);
 	}
 
 	console.log("\n==> Act timestamps:");
