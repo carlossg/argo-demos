@@ -13,6 +13,7 @@
 import { $ } from "bun";
 import { chromium } from "playwright";
 import { type Cut, cutVideo } from "./trim-video";
+import { addVoiceover } from "./voiceover";
 
 const NAMESPACE = process.env.NAMESPACE ?? "quarkus-demo";
 const DASHBOARD_HOST = process.env.DASHBOARD_HOST ?? "quarkus-demo.argo.csanchez.org";
@@ -43,7 +44,7 @@ const cuts: Cut[] = [];
 const acts: { name: string; t: number }[] = [];
 
 function markAct(name: string) {
-	const t = (Date.now() - t0) / 1000;
+	const t = videoNow();
 	acts.push({ name, t });
 	console.log(`\n### ACT_MARKER: ${name} (${t.toFixed(2)}s) ###`);
 }
@@ -129,32 +130,20 @@ async function waitForRemediationPR(sinceMs: number): Promise<string> {
 	return url;
 }
 
-async function findJulesIssue(sinceMs: number): Promise<string> {
+async function waitForRemediationOutcome(sinceMs: number): Promise<string> {
 	let url = "";
-	await waitUntil("jules issue", 120_000, 5_000, async () => {
-		const issues = (await $`gh issue list --repo ${DEMO_REPO} --label jules --state all --json url,createdAt --limit 5`.json()) as {
+	await waitUntil("remediation PR or issue", 420_000, 10_000, async () => {
+		const prs = (await $`gh pr list --repo ${DEMO_REPO} --state all --json url,createdAt --limit 5`.json()) as {
+			url: string;
+			createdAt: string;
+		}[];
+		url = prs.find((p) => new Date(p.createdAt).getTime() > sinceMs)?.url ?? "";
+		if (url) return true;
+		const issues = (await $`gh issue list --repo ${DEMO_REPO} --state all --json url,createdAt --limit 5`.json()) as {
 			url: string;
 			createdAt: string;
 		}[];
 		url = issues.find((i) => new Date(i.createdAt).getTime() > sinceMs)?.url ?? "";
-		return Boolean(url);
-	});
-	return url;
-}
-
-/** Jules comments on the issue when it opens its PR; returns that PR URL. */
-async function julesPrUrl(issueUrl: string): Promise<string> {
-	const num = issueUrl.split("/").pop()!;
-	let url = "";
-	await waitUntil("Jules PR", 15 * 60_000, 5_000, async () => {
-		const res = (await $`gh issue view ${num} --repo ${DEMO_REPO} --json comments`.json()) as {
-			comments: { author: { login: string }; body: string }[];
-		};
-		for (const c of res.comments) {
-			if (!c.author.login.includes("jules")) continue;
-			const m = c.body.match(/https:\/\/github\.com\/[^)\s]+\/pull\/\d+/);
-			if (m) url = m[0];
-		}
 		return Boolean(url);
 	});
 	return url;
@@ -256,6 +245,7 @@ async function main() {
 	if (MEMORYLEAK) {
 		await page.goto(DASHBOARD_URL);
 		markAct("memoryleak_start");
+		const mlStartMs = Date.now();
 		const before2 = await analysisRunNames();
 		const mlImage = `*=${IMAGES.memoryleak}`;
 		await $`kubectl argo rollouts set image quarkus-demo ${mlImage} -n ${NAMESPACE}`;
@@ -268,32 +258,20 @@ async function main() {
 		markAct("memoryleak_recovered");
 		await sleep(10_000); // hold on the fully recovered 100% stable dashboard
 
-		const issueUrl = await findJulesIssue(startMs);
-		markAct("jules_issue");
-		await page.goto(issueUrl);
 		const waitStart = videoNow();
-		// Real-time wait for the Jules GitHub app to open its PR; most of it is cut from the video.
-		const waiter = julesPrUrl(issueUrl);
-		let done = false;
-		waiter.finally(() => (done = true));
-		while (!done) {
-			await sleep(15_000);
-			if (!done) await page.reload();
-		}
-		const julesPr = await waiter;
-		await page.reload();
+		const artifactUrl = await waitForRemediationOutcome(mlStartMs);
 		const waitEnd = videoNow();
 		if (waitEnd - waitStart > JULES_WAIT_KEEP_S + 1) cuts.push([waitStart + JULES_WAIT_KEEP_S, waitEnd - 0.3]);
-		await sleep(6_000);
-		await page.mouse.wheel(0, 600);
-		await sleep(5_000);
-		markAct("jules_pr");
-		await page.goto(julesPr);
+
+		markAct("remediation_artifact");
+		await page.goto(artifactUrl);
 		await sleep(SHOW_MS);
-		await page.goto(`${julesPr}/files`);
-		await sleep(SHOW_MS / 2);
-		await page.mouse.wheel(0, 500);
-		await sleep(SHOW_MS / 2);
+		if (artifactUrl.includes("/pull/")) {
+			await page.goto(`${artifactUrl}/files`);
+			await sleep(SHOW_MS / 2);
+			await page.mouse.wheel(0, 500);
+			await sleep(SHOW_MS / 2);
+		}
 	}
 
 	markAct("outro");
@@ -306,6 +284,9 @@ async function main() {
 	if (!webm) throw new Error("No video produced");
 	const mp4 = webm.replace(/\.webm$/, ".mp4");
 	await cutVideo(webm, mp4, cuts);
+	if (process.env.VOICEOVER !== "0") {
+		await addVoiceover(mp4, acts, cuts);
+	}
 
 	console.log("\n==> Act timestamps:");
 	console.log("(act timestamps are pre-cut)");

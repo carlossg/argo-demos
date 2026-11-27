@@ -1,0 +1,189 @@
+#!/usr/bin/env bun
+// Adds cross-platform voice-over narration synced to post-cut act timestamps.
+// Providers (TTS_PROVIDER=auto|say|gemini|espeak):
+//   - darwin (macOS): `say` (SAY_VOICE, default "Samantha")
+//   - linux / container: Gemini TTS (if GEMINI_API_KEY is set), else `espeak-ng`
+
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { $ } from "bun";
+import { type Cut, mergeCuts } from "./trim-video";
+
+export interface ActMarker {
+	name: string;
+	/** Video-relative seconds (from videoT0) captured at markAct(). */
+	t: number;
+}
+
+export type TtsProvider = "say" | "gemini" | "espeak";
+
+const NARRATIONS: Record<string, string> = {
+	intro:
+		"Welcome to the Kubernetes AI Ops progressive delivery demo, powered by Argo Rollouts, Gemini 4 Hydrogen, Decision 1, and Gemini 4 Neon.",
+	stable_start:
+		"First, we trigger a clean canary deployment on v1 stable.",
+	stable_analysis_running:
+		"The orchestrator collects pod logs, events, and Prometheus metrics in parallel, then grades the analysis with Gemini Decision 1.",
+	stable_healthy:
+		"All checks look healthy. The rollout promotes cleanly to one hundred percent.",
+	nullpointer_start:
+		"Next, we deploy v2 with a NullPointerException regression.",
+	nullpointer_analysis_running:
+		"Wait and watch as the collector spots errors and Gemini Decision 1 grades the rollback.",
+	nullpointer_aborted:
+		"The AI aborts the rollout immediately and rolls traffic back to stable, while delegating a fix to the gVisor remediation agent.",
+	github_pr:
+		"Using Gemini 4 Neon inside a gVisor sandbox, the remediation agent reproduced the bug, verified the fix, and opened a pull request.",
+	memoryleak_start:
+		"Finally, we deploy v3, which introduces a memory leak regression.",
+	memoryleak_aborted:
+		"Prometheus metrics and pod diagnostics catch the anomaly, abort the canary, and trigger another automated remediation.",
+	remediation_artifact:
+		"Here is the resulting remediation pull request or issue created automatically on GitHub.",
+	outro:
+		"That completes all three progressive delivery scenarios, from detection to automated remediation.",
+};
+
+/** Maps a pre-cut video timestamp (seconds) to its post-cut timestamp (seconds). */
+export function toPostCutTime(preCutSec: number, cuts: Cut[]): number {
+	const merged = mergeCuts(cuts);
+	let removed = 0;
+	for (const [start, end] of merged) {
+		if (preCutSec <= start) break;
+		if (preCutSec >= end) {
+			removed += end - start;
+		} else {
+			removed += preCutSec - start;
+			break;
+		}
+	}
+	return Math.max(0, preCutSec - removed);
+}
+
+export function resolveTtsProvider(env = process.env, platform = process.platform): TtsProvider {
+	const requested = (env.TTS_PROVIDER ?? "auto").toLowerCase();
+	if (requested === "say" || requested === "gemini" || requested === "espeak") {
+		return requested;
+	}
+	if (requested !== "auto") {
+		throw new Error(`Unsupported TTS_PROVIDER '${requested}' (expected auto, say, gemini, or espeak)`);
+	}
+	if (platform === "darwin") return "say";
+	if (env.GEMINI_API_KEY) return "gemini";
+	return "espeak";
+}
+
+function pcmToWav(pcm: Uint8Array, sampleRate = 24000, channels = 1, bitsPerSample = 16): Uint8Array {
+	const header = new ArrayBuffer(44);
+	const view = new DataView(header);
+	const writeStr = (offset: number, s: string) => {
+		for (let i = 0; i < s.length; i++) view.setUint8(offset + i, s.charCodeAt(i));
+	};
+	writeStr(0, "RIFF");
+	view.setUint32(4, 36 + pcm.byteLength, true);
+	writeStr(8, "WAVE");
+	writeStr(12, "fmt ");
+	view.setUint32(16, 16, true);
+	view.setUint16(20, 1, true);
+	view.setUint16(22, channels, true);
+	view.setUint32(24, sampleRate, true);
+	view.setUint32(28, sampleRate * channels * (bitsPerSample / 8), true);
+	view.setUint16(32, channels * (bitsPerSample / 8), true);
+	view.setUint16(34, bitsPerSample, true);
+	writeStr(36, "data");
+	view.setUint32(40, pcm.byteLength, true);
+
+	const out = new Uint8Array(44 + pcm.byteLength);
+	out.set(new Uint8Array(header), 0);
+	out.set(pcm, 44);
+	return out;
+}
+
+async function synthesizeGeminiClip(text: string, outWavPath: string) {
+	const apiKey = process.env.GEMINI_API_KEY;
+	if (!apiKey) throw new Error("GEMINI_API_KEY is required for TTS_PROVIDER=gemini");
+	const model = process.env.GEMINI_TTS_MODEL ?? "gemini-2.5-flash-preview-tts";
+	const voiceName = process.env.GEMINI_TTS_VOICE ?? "Kore";
+	const res = await fetch(
+		`https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`,
+		{
+			method: "POST",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify({
+				contents: [{ parts: [{ text }] }],
+				generationConfig: {
+					responseModalities: ["AUDIO"],
+					speechConfig: {
+						voiceConfig: { prebuiltVoiceConfig: { voiceName } },
+					},
+				},
+			}),
+		},
+	);
+	if (!res.ok) {
+		throw new Error(`Gemini TTS failed (${res.status}): ${await res.text()}`);
+	}
+	const body = (await res.json()) as {
+		candidates?: { content?: { parts?: { inlineData?: { data?: string; mimeType?: string } }[] } }[];
+	};
+	const inline = body.candidates?.[0]?.content?.parts?.[0]?.inlineData;
+	if (!inline?.data) throw new Error("Gemini TTS response missing inlineData audio");
+	const raw = Buffer.from(inline.data, "base64");
+	const wav = inline.mimeType?.includes("wav") ? raw : pcmToWav(raw);
+	await writeFile(outWavPath, wav);
+}
+
+async function synthesizeCue(text: string, workDir: string, index: number, provider: TtsProvider): Promise<string> {
+	if (provider === "say") {
+		const voice = process.env.SAY_VOICE ?? "Samantha";
+		const clip = join(workDir, `cue-${index}.aiff`);
+		await $`say -v ${voice} -o ${clip} ${text}`.quiet();
+		return clip;
+	}
+	const clip = join(workDir, `cue-${index}.wav`);
+	if (provider === "gemini") {
+		await synthesizeGeminiClip(text, clip);
+		return clip;
+	}
+	const voice = process.env.ESPEAK_VOICE ?? "en-us";
+	await $`espeak-ng -v ${voice} -w ${clip} ${text}`.quiet();
+	return clip;
+}
+
+export async function addVoiceover(videoPath: string, acts: ActMarker[], cuts: Cut[], provider = resolveTtsProvider()) {
+	const cues = acts
+		.filter((a) => NARRATIONS[a.name])
+		.map((a) => ({
+			name: a.name,
+			text: NARRATIONS[a.name],
+			delayMs: Math.round(toPostCutTime(a.t, cuts) * 1000),
+		}));
+
+	if (cues.length === 0) return;
+
+	const workDir = await mkdtemp(join(tmpdir(), "demo-voiceover-"));
+	const tempOut = videoPath.replace(/\.mp4$/, ".voiced.mp4");
+	try {
+		const clipPaths: string[] = [];
+		for (let i = 0; i < cues.length; i++) {
+			clipPaths.push(await synthesizeCue(cues[i].text, workDir, i, provider));
+		}
+
+		const inputs = ["-i", videoPath, ...clipPaths.flatMap((p) => ["-i", p])];
+		const filterParts: string[] = [];
+		const labels: string[] = [];
+		for (let i = 0; i < cues.length; i++) {
+			const label = `a${i}`;
+			filterParts.push(`[${i + 1}:a]adelay=${cues[i].delayMs}|${cues[i].delayMs}[${label}]`);
+			labels.push(`[${label}]`);
+		}
+		filterParts.push(`${labels.join("")}amix=inputs=${cues.length}:normalize=0[aout]`);
+
+		await $`ffmpeg -loglevel error -y ${inputs} -filter_complex ${filterParts.join(";")} -map 0:v -map "[aout]" -c:v copy -c:a aac -shortest ${tempOut}`.quiet();
+		await $`mv ${tempOut} ${videoPath}`.quiet();
+		console.log(`  added '${provider}' voiceover (${cues.length} cues) to ${videoPath}`);
+	} finally {
+		await rm(workDir, { recursive: true, force: true });
+	}
+}
