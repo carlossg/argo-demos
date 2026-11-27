@@ -438,7 +438,7 @@ function install_kubernetes_agent_kdubois() {
 		--dry-run=client -o yaml | kubectl apply -f -
 
 	echo "Installing kdubois/kubernetes-aiops-agent"
-	kubectl apply -k "${_DEMO_FUNCTIONS_DIR}/k8s-kdubois-agent"
+	kubectl apply -k "${_DEMO_FUNCTIONS_DIR}/k8s-kdubois-agent" || return $?
 	# Restart existing pods so ConfigMap model changes (envFrom) take effect
 	kubectl rollout restart deployment/kubernetes-agent -n argo-rollouts
 }
