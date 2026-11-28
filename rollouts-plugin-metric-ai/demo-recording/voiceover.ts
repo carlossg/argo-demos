@@ -103,7 +103,7 @@ function pcmToWav(pcm: Uint8Array, sampleRate = 24000, channels = 1, bitsPerSamp
 async function synthesizeGeminiClip(text: string, outWavPath: string) {
 	const apiKey = process.env.GEMINI_API_KEY;
 	if (!apiKey) throw new Error("GEMINI_API_KEY is required for TTS_PROVIDER=gemini");
-	const model = process.env.GEMINI_TTS_MODEL ?? "gemini-2.5-flash-preview-tts";
+	const model = process.env.GEMINI_TTS_MODEL ?? "gemini-3.8-flash-tts";
 	const voiceName = process.env.GEMINI_TTS_VOICE ?? "Kore";
 	const res = await fetch(
 		`https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`,
