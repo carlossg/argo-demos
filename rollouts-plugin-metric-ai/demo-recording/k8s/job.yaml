@@ -4,16 +4,33 @@ metadata:
   name: demo-recorder
   namespace: quarkus-demo
 spec:
+  ttlSecondsAfterFinished: 3600
   backoffLimit: 0
   activeDeadlineSeconds: 1800
   template:
     spec:
       serviceAccountName: demo-recorder
       restartPolicy: Never
+      securityContext:
+        runAsNonRoot: true
+        seccompProfile:
+          type: RuntimeDefault
+      volumes:
+        - name: dshm
+          emptyDir:
+            medium: Memory
+            sizeLimit: 1Gi
       containers:
         - name: recorder
           image: demo-recording:latest
           args: ["record-demo.ts"]
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
+          volumeMounts:
+            - name: dshm
+              mountPath: /dev/shm
           env:
             - name: DASHBOARD_URL
               value: "http://quarkus-demo-stable.quarkus-demo.svc.cluster.local/"
@@ -34,6 +51,8 @@ spec:
             requests:
               cpu: "1"
               memory: "2Gi"
+              ephemeral-storage: "2Gi"
             limits:
               cpu: "2"
               memory: "4Gi"
+              ephemeral-storage: "8Gi"

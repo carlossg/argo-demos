@@ -47,9 +47,11 @@ const NARRATIONS: Record<string, string> = {
 
 /** Maps a pre-cut video timestamp (seconds) to its post-cut timestamp (seconds). */
 export function toPostCutTime(preCutSec: number, cuts: Cut[]): number {
-	const merged = mergeCuts(cuts);
+	const sanitized = cuts.map(([start, end]) => [Math.max(0, start), Math.max(0, end)] as Cut);
+	const merged = mergeCuts(sanitized);
 	let removed = 0;
 	for (const [start, end] of merged) {
+		if (end <= start) continue;
 		if (preCutSec <= start) break;
 		if (preCutSec >= end) {
 			removed += end - start;
@@ -105,24 +107,44 @@ async function synthesizeGeminiClip(text: string, outWavPath: string) {
 	if (!apiKey) throw new Error("GEMINI_API_KEY is required for TTS_PROVIDER=gemini");
 	const model = process.env.GEMINI_TTS_MODEL ?? "gemini-3.8-flash-tts";
 	const voiceName = process.env.GEMINI_TTS_VOICE ?? "Kore";
-	const res = await fetch(
-		`https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`,
-		{
-			method: "POST",
-			headers: { "Content-Type": "application/json" },
-			body: JSON.stringify({
-				contents: [{ parts: [{ text }] }],
-				generationConfig: {
-					responseModalities: ["AUDIO"],
-					speechConfig: {
-						voiceConfig: { prebuiltVoiceConfig: { voiceName } },
-					},
-				},
-			}),
+	const url = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent`;
+	const payload = JSON.stringify({
+		contents: [{ parts: [{ text }] }],
+		generationConfig: {
+			responseModalities: ["AUDIO"],
+			speechConfig: {
+				voiceConfig: { prebuiltVoiceConfig: { voiceName } },
+			},
 		},
-	);
-	if (!res.ok) {
-		throw new Error(`Gemini TTS failed (${res.status}): ${await res.text()}`);
+	});
+
+	const maxAttempts = 4;
+	let res: Response | undefined;
+	for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+		try {
+			res = await fetch(url, {
+				method: "POST",
+				headers: {
+					"Content-Type": "application/json",
+					"x-goog-api-key": apiKey,
+				},
+				body: payload,
+			});
+			if (res.ok || (res.status !== 429 && res.status < 500) || attempt === maxAttempts) {
+				break;
+			}
+			const delayMs = 1000 * 2 ** (attempt - 1);
+			console.warn(`  Gemini TTS returned ${res.status}, retrying in ${delayMs}ms (attempt ${attempt}/${maxAttempts})`);
+			await Bun.sleep(delayMs);
+		} catch (err) {
+			if (attempt === maxAttempts) throw err;
+			const delayMs = 1000 * 2 ** (attempt - 1);
+			console.warn(`  Gemini TTS request error, retrying in ${delayMs}ms (attempt ${attempt}/${maxAttempts}): ${err}`);
+			await Bun.sleep(delayMs);
+		}
+	}
+	if (!res || !res.ok) {
+		throw new Error(`Gemini TTS failed (${res?.status ?? "unknown"}): ${res ? await res.text() : "no response"}`);
 	}
 	const body = (await res.json()) as {
 		candidates?: { content?: { parts?: { inlineData?: { data?: string; mimeType?: string } }[] } }[];
@@ -138,7 +160,7 @@ async function synthesizeCue(text: string, workDir: string, index: number, provi
 	if (provider === "say") {
 		const voice = process.env.SAY_VOICE ?? "Samantha";
 		const clip = join(workDir, `cue-${index}.aiff`);
-		await $`say -v ${voice} -o ${clip} ${text}`.quiet();
+		await $`say -v ${voice} -o ${clip} -- ${text}`.quiet();
 		return clip;
 	}
 	const clip = join(workDir, `cue-${index}.wav`);
@@ -147,7 +169,7 @@ async function synthesizeCue(text: string, workDir: string, index: number, provi
 		return clip;
 	}
 	const voice = process.env.ESPEAK_VOICE ?? "en-us";
-	await $`espeak-ng -v ${voice} -w ${clip} ${text}`.quiet();
+	await $`espeak-ng -v ${voice} -w ${clip} -- ${text}`.quiet();
 	return clip;
 }
 
@@ -198,9 +220,16 @@ export async function addVoiceover(videoPath: string, acts: ActMarker[], cuts: C
 			labels.push(`[${label}]`);
 		}
 		filterParts.push(`${labels.join("")}amix=inputs=${cues.length}:normalize=0[aout]`);
-		const videoArgs = padSec > 0 ? ["-vf", `tpad=stop_mode=clone:stop_duration=${padSec}`, "-pix_fmt", "yuv420p"] : ["-c:v", "copy"];
+		if (padSec > 0) {
+			filterParts.push(`[0:v]tpad=stop_mode=clone:stop_duration=${padSec}[vout]`);
+		}
+		const videoMap = padSec > 0 ? "[vout]" : "0:v";
+		const videoArgs =
+			padSec > 0
+				? ["-c:v", "libx264", "-preset", "veryfast", "-crf", "20", "-pix_fmt", "yuv420p", "-movflags", "+faststart"]
+				: ["-c:v", "copy"];
 
-		await $`ffmpeg -loglevel error -y ${inputs} -filter_complex ${filterParts.join(";")} -map 0:v -map "[aout]" ${videoArgs} -c:a aac ${tempOut}`.quiet();
+		await $`ffmpeg -loglevel error -y ${inputs} -filter_complex ${filterParts.join(";")} -map ${videoMap} -map "[aout]" ${videoArgs} -c:a aac ${tempOut}`.quiet();
 		await $`mv ${tempOut} ${videoPath}`.quiet();
 		console.log(`  added '${provider}' voiceover (${cues.length} non-overlapping cues) to ${videoPath}`);
 	} finally {

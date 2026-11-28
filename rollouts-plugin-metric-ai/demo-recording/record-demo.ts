@@ -12,7 +12,7 @@
 
 import { $ } from "bun";
 import { chromium } from "playwright";
-import { uploadToGcs } from "./gcs";
+import { getAccessToken, uploadToGcs } from "./gcs";
 import { type Cut, cutVideo } from "./trim-video";
 import { addVoiceover } from "./voiceover";
 
@@ -117,34 +117,60 @@ async function waitForFullRecovery() {
 	});
 }
 
+const REMEDIATION_PR_BRANCH_RE = /fix\/k8s-issue-|jules/i;
+const REMEDIATION_TITLE_RE = /canary|roll\s*back|remediat|fix:|memory|heap|latency|nullpointer/i;
+
+function isRemediationPr(pr: { title: string; headRefName?: string }, excludePattern?: RegExp): boolean {
+	if (excludePattern?.test(pr.title)) return false;
+	return REMEDIATION_PR_BRANCH_RE.test(pr.headRefName ?? "") || REMEDIATION_TITLE_RE.test(pr.title);
+}
+
+function isRemediationIssue(issue: { title: string }, excludePattern?: RegExp): boolean {
+	if (excludePattern?.test(issue.title)) return false;
+	return REMEDIATION_TITLE_RE.test(issue.title);
+}
+
 async function waitForRemediationPR(sinceMs: number): Promise<string> {
+	const sinceSecMs = Math.floor(sinceMs / 1000) * 1000;
 	let url = "";
 	await waitUntil("remediation PR", 240_000, 5_000, async () => {
-		const prs = (await $`gh pr list --repo ${DEMO_REPO} --state all --json number,url,createdAt --limit 5`.json()) as {
+		const prs = (await $`gh pr list --repo ${DEMO_REPO} --state all --json number,url,title,headRefName,createdAt --limit 5`.json()) as {
 			url: string;
+			title: string;
+			headRefName?: string;
 			createdAt: string;
 		}[];
-		url = prs.find((pr) => new Date(pr.createdAt).getTime() > sinceMs)?.url ?? "";
+		url = prs.find((pr) => new Date(pr.createdAt).getTime() >= sinceSecMs && isRemediationPr(pr))?.url ?? "";
 		return Boolean(url);
 	});
 	console.log(`  PR created: ${url}`);
 	return url;
 }
 
-async function waitForRemediationOutcome(sinceMs: number): Promise<string> {
+async function waitForRemediationOutcome(sinceMs: number, ignoreUrls: Set<string> = new Set()): Promise<string> {
+	const sinceSecMs = Math.floor(sinceMs / 1000) * 1000;
 	let url = "";
 	await waitUntil("remediation PR or issue", 420_000, 10_000, async () => {
-		const prs = (await $`gh pr list --repo ${DEMO_REPO} --state all --json url,createdAt --limit 5`.json()) as {
+		const prs = (await $`gh pr list --repo ${DEMO_REPO} --state all --json url,title,headRefName,createdAt --limit 5`.json()) as {
 			url: string;
+			title: string;
+			headRefName?: string;
 			createdAt: string;
 		}[];
-		url = prs.find((p) => new Date(p.createdAt).getTime() > sinceMs)?.url ?? "";
+		url =
+			prs.find(
+				(p) => !ignoreUrls.has(p.url) && new Date(p.createdAt).getTime() >= sinceSecMs && isRemediationPr(p, /nullpointer/i),
+			)?.url ?? "";
 		if (url) return true;
-		const issues = (await $`gh issue list --repo ${DEMO_REPO} --state all --json url,createdAt --limit 5`.json()) as {
+		const issues = (await $`gh issue list --repo ${DEMO_REPO} --state all --json url,title,createdAt --limit 5`.json()) as {
 			url: string;
+			title: string;
 			createdAt: string;
 		}[];
-		url = issues.find((i) => new Date(i.createdAt).getTime() > sinceMs)?.url ?? "";
+		url =
+			issues.find(
+				(i) => !ignoreUrls.has(i.url) && new Date(i.createdAt).getTime() >= sinceSecMs && isRemediationIssue(i, /nullpointer/i),
+			)?.url ?? "";
 		return Boolean(url);
 	});
 	return url;
@@ -167,6 +193,14 @@ async function waitForDashboard(args: string[]) {
 }
 
 async function main() {
+	const gcsBucket = process.env.GCS_BUCKET?.trim();
+	if (gcsBucket === "REPLACE_WITH_GCS_BUCKET") {
+		throw new Error("GCS_BUCKET is still set to the REPLACE_WITH_GCS_BUCKET placeholder");
+	}
+	if (gcsBucket) {
+		await getAccessToken();
+	}
+
 	const args = DASHBOARD_IP ? [`--host-resolver-rules=MAP ${DASHBOARD_HOST} ${DASHBOARD_IP}`] : [];
 	await waitForDashboard(args);
 	const browser = await chromium.launch({ args });
@@ -260,7 +294,7 @@ async function main() {
 		await sleep(10_000); // hold on the fully recovered 100% stable dashboard
 
 		const waitStart = videoNow();
-		const artifactUrl = await waitForRemediationOutcome(mlStartMs);
+		const artifactUrl = await waitForRemediationOutcome(mlStartMs, new Set([prUrl]));
 		const waitEnd = videoNow();
 		if (waitEnd - waitStart > JULES_WAIT_KEEP_S + 1) cuts.push([waitStart + JULES_WAIT_KEEP_S, waitEnd - 0.3]);
 
@@ -286,10 +320,14 @@ async function main() {
 	const mp4 = webm.replace(/\.webm$/, ".mp4");
 	await cutVideo(webm, mp4, cuts);
 	if (process.env.VOICEOVER !== "0") {
-		await addVoiceover(mp4, acts, cuts);
+		try {
+			await addVoiceover(mp4, acts, cuts);
+		} catch (err) {
+			console.warn(`  warning: voiceover failed, continuing without audio: ${err instanceof Error ? err.message : String(err)}`);
+		}
 	}
-	if (process.env.GCS_BUCKET) {
-		await uploadToGcs(mp4, process.env.GCS_BUCKET);
+	if (gcsBucket) {
+		await uploadToGcs(mp4, gcsBucket);
 	}
 
 	console.log("\n==> Act timestamps:");

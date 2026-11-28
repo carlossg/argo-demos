@@ -68,3 +68,26 @@ from any video: `bun run trim-video.ts in.mp4 out.mp4 76-92 256-487`.
 
 Env: `SHOW_MS`, `JULES_WAIT_KEEP_S`, `DASHBOARD_HOST`, `DASHBOARD_IP`, `DEMO_REPO`, `NAMESPACE`, `MEMORYLEAK=0`.
 The Jules segment waits in real time (up to 15 minutes) for Jules to open its PR.
+
+### Recording in Kubernetes (GKE)
+
+`demo-recording/k8s/` provides a `Job` (`demo-recorder`) that runs the recorder in-cluster and uploads the resulting `.mp4` to `GCS_BUCKET`.
+
+1. Create the secret in `quarkus-demo` (`GEMINI_API_KEY` is optional; when omitted, `espeak-ng` is used):
+
+   ```sh
+   kubectl create secret generic demo-recorder-secret -n quarkus-demo \
+     --from-literal=GITHUB_TOKEN="$GITHUB_TOKEN" \
+     --from-literal=GEMINI_API_KEY="$GEMINI_API_KEY"
+   ```
+
+2. Provision a GCS bucket with uniform bucket-level access and grant the `quarkus-demo/demo-recorder` Kubernetes ServiceAccount direct Workload Identity access (no ServiceAccount annotation required):
+
+   ```sh
+   gcloud storage buckets create "gs://${GCS_BUCKET}" --uniform-bucket-level-access
+   gcloud storage buckets add-iam-policy-binding "gs://${GCS_BUCKET}" \
+     --role=roles/storage.objectAdmin \
+     --member="principal://iam.googleapis.com/projects/${PROJECT_NUMBER}/locations/global/workloadIdentityPools/${PROJECT_ID}.svc.id.goog/subject/ns/quarkus-demo/sa/demo-recorder"
+   ```
+
+3. Set `GCS_BUCKET` (replacing `REPLACE_WITH_GCS_BUCKET`) and the container image in `demo-recording/k8s/job.yaml`, then apply with `kubectl apply -k demo-recording/k8s/`.

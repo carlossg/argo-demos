@@ -1,0 +1,5 @@
+node_modules
+recording
+*.mp4
+*.webm
+k8s

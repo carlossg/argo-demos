@@ -14,8 +14,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
   && rm -rf /var/lib/apt/lists/*
 
 # Install bun
-RUN curl -fsSL https://bun.sh/install | bash \
-  && ln -s /root/.bun/bin/bun /usr/local/bin/bun
+ENV BUN_INSTALL=/usr/local
+RUN curl -fsSL https://bun.sh/install | bash
 
 # Install kubectl & kubectl-argo-rollouts
 RUN ARCH="${TARGETARCH:-amd64}" \
@@ -25,9 +25,10 @@ RUN ARCH="${TARGETARCH:-amd64}" \
   && chmod +x /usr/local/bin/kubectl-argo-rollouts
 
 WORKDIR /workspace
-COPY package.json ./
-RUN bun install
-COPY . .
+COPY --chown=pwuser:pwuser package.json ./
+RUN bun install && chown -R pwuser:pwuser /workspace
+COPY --chown=pwuser:pwuser . .
 
+USER pwuser
 ENTRYPOINT ["bun", "run"]
 CMD ["record-demo.ts"]

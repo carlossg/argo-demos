@@ -11,8 +11,11 @@ metadata:
   namespace: quarkus-demo
 rules:
   - apiGroups: ["argoproj.io"]
-    resources: ["rollouts", "analysisruns"]
+    resources: ["rollouts"]
     verbs: ["get", "list", "watch", "patch", "update"]
+  - apiGroups: ["argoproj.io"]
+    resources: ["analysisruns"]
+    verbs: ["get", "list", "watch"]
   - apiGroups: ["networking.k8s.io"]
     resources: ["ingresses"]
     verbs: ["get", "list"]
