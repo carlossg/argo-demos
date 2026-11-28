@@ -151,6 +151,12 @@ async function synthesizeCue(text: string, workDir: string, index: number, provi
 	return clip;
 }
 
+async function getDurationMs(mediaPath: string): Promise<number> {
+	const out = (await $`ffprobe -v error -show_entries format=duration -of default=nk=1:nw=1 ${mediaPath}`.text()).trim();
+	const sec = Number.parseFloat(out);
+	return Number.isFinite(sec) ? Math.round(sec * 1000) : 0;
+}
+
 export async function addVoiceover(videoPath: string, acts: ActMarker[], cuts: Cut[], provider = resolveTtsProvider()) {
 	const cues = acts
 		.filter((a) => NARRATIONS[a.name])
@@ -166,23 +172,37 @@ export async function addVoiceover(videoPath: string, acts: ActMarker[], cuts: C
 	const tempOut = videoPath.replace(/\.mp4$/, ".voiced.mp4");
 	try {
 		const clipPaths: string[] = [];
+		const clipDurationsMs: number[] = [];
 		for (let i = 0; i < cues.length; i++) {
-			clipPaths.push(await synthesizeCue(cues[i].text, workDir, i, provider));
+			const clip = await synthesizeCue(cues[i].text, workDir, i, provider);
+			clipPaths.push(clip);
+			clipDurationsMs.push(await getDurationMs(clip));
 		}
+
+		let prevEndMs = -500;
+		const scheduledDelaysMs = cues.map((c, i) => {
+			const startMs = Math.max(c.delayMs, prevEndMs + 500);
+			prevEndMs = startMs + clipDurationsMs[i];
+			return startMs;
+		});
+
+		const videoDurMs = await getDurationMs(videoPath);
+		const padSec = prevEndMs + 500 > videoDurMs ? Math.ceil((prevEndMs + 500 - videoDurMs) / 1000) : 0;
 
 		const inputs = ["-i", videoPath, ...clipPaths.flatMap((p) => ["-i", p])];
 		const filterParts: string[] = [];
 		const labels: string[] = [];
 		for (let i = 0; i < cues.length; i++) {
 			const label = `a${i}`;
-			filterParts.push(`[${i + 1}:a]adelay=${cues[i].delayMs}|${cues[i].delayMs}[${label}]`);
+			filterParts.push(`[${i + 1}:a]adelay=${scheduledDelaysMs[i]}|${scheduledDelaysMs[i]}[${label}]`);
 			labels.push(`[${label}]`);
 		}
 		filterParts.push(`${labels.join("")}amix=inputs=${cues.length}:normalize=0[aout]`);
+		const videoArgs = padSec > 0 ? ["-vf", `tpad=stop_mode=clone:stop_duration=${padSec}`, "-pix_fmt", "yuv420p"] : ["-c:v", "copy"];
 
-		await $`ffmpeg -loglevel error -y ${inputs} -filter_complex ${filterParts.join(";")} -map 0:v -map "[aout]" -c:v copy -c:a aac -shortest ${tempOut}`.quiet();
+		await $`ffmpeg -loglevel error -y ${inputs} -filter_complex ${filterParts.join(";")} -map 0:v -map "[aout]" ${videoArgs} -c:a aac ${tempOut}`.quiet();
 		await $`mv ${tempOut} ${videoPath}`.quiet();
-		console.log(`  added '${provider}' voiceover (${cues.length} cues) to ${videoPath}`);
+		console.log(`  added '${provider}' voiceover (${cues.length} non-overlapping cues) to ${videoPath}`);
 	} finally {
 		await rm(workDir, { recursive: true, force: true });
 	}
