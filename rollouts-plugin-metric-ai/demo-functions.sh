@@ -560,6 +560,10 @@ function scale_down() {
 	echo "Scaling all deployments in gemma-system namespace to 0..."
 	kubectl scale deployment --all -n gemma-system --replicas=0 || echo "  ⚠️  deployments not found"
 
+	echo "Scaling all deployments in remediation-system namespace to 0..."
+	kubectl scale deployment --all -n remediation-system --replicas=0 || echo "  ⚠️  deployments not found"
+	kubectl delete sandbox --all -n remediation --ignore-not-found || echo "  ⚠️  sandboxes not found"
+
 	echo ""
 	echo "✓ All demo components scaled down to 0"
 	echo ""
@@ -598,6 +602,9 @@ function scale_up() {
 
 	echo "Scaling all deployments in gemma-system namespace to 1..."
 	kubectl scale deployment --all -n gemma-system --replicas=1 || echo "  ⚠️  deployments not found"
+
+	echo "Scaling all deployments in remediation-system namespace to 1..."
+	kubectl scale deployment --all -n remediation-system --replicas=1 || echo "  ⚠️  deployments not found"
 
 	echo "Scaling all deployments in argo-rollouts-manager-system namespace to 1..."
 	kubectl scale deployment --all -n argo-rollouts-manager-system --replicas=1 || echo "  ⚠️  deployments not found"
